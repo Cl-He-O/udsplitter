@@ -26,6 +26,15 @@ use common::handle_socks5;
 #[derive(Deserialize)]
 struct Config {
     listen: String,
+
+    #[serde(default = "Config::default_timeout_ms")]
+    timeout_ms: u64,
+}
+
+impl Config {
+    fn default_timeout_ms() -> u64 {
+        1000
+    }
 }
 
 enum RW {
@@ -34,8 +43,6 @@ enum RW {
 }
 
 type ConnMap = HashMap<u64, (Instant, Arc<Mutex<Option<RW>>>)>;
-
-const TIMEOUT: Duration = Duration::from_millis(500);
 
 #[tokio::main]
 async fn main() {
@@ -47,27 +54,15 @@ async fn main() {
 
     let conn_map = Arc::new(Mutex::new(ConnMap::new()));
 
-    {
-        let conn_map = conn_map.clone();
-        // garbage collection
-        spawn(async move {
-            loop {
-                sleep(Duration::from_secs(30)).await;
-
-                let now = Instant::now();
-                let mut conn_map = conn_map.lock().await;
-                conn_map.retain(|_, (t, _)| now - t.to_owned() < TIMEOUT);
-            }
-        });
-    }
-
     loop {
         if let Ok((conn, _)) = server.accept().await {
             let conn_map = conn_map.clone();
 
             spawn(async move {
                 eprintln!("Connection from {}", conn.peer_addr().unwrap());
-                if let Err(err) = handle(conn, conn_map).await {
+                if let Err(err) =
+                    handle(conn, conn_map, Duration::from_millis(config.timeout_ms)).await
+                {
                     eprintln!("{}", err)
                 }
             });
@@ -75,10 +70,15 @@ async fn main() {
     }
 }
 
-async fn handle(conn: IncomingConnection<()>, conn_map: Arc<Mutex<ConnMap>>) -> Result<(), Error> {
+async fn handle(
+    conn: IncomingConnection<()>,
+    conn_map: Arc<Mutex<ConnMap>>,
+    ttimeout: Duration,
+) -> Result<(), Error> {
+    let peer_addr = conn.peer_addr().unwrap();
     let (conn, addr) = handle_socks5(conn).await?;
 
-    let mut conn = match conn.reply(Reply::Succeeded, Address::unspecified()).await {
+    let conn = match conn.reply(Reply::Succeeded, Address::unspecified()).await {
         Ok(conn) => conn,
         Err((err, mut conn)) => {
             let _ = conn.shutdown().await;
@@ -86,31 +86,40 @@ async fn handle(conn: IncomingConnection<()>, conn_map: Arc<Mutex<ConnMap>>) -> 
         }
     };
 
-    let (mut r, mut w) = conn.split();
+    let (mut r, mut w) = split(conn);
 
-    let mut id = timeout(TIMEOUT, r.read_u64())
+    let mut id = timeout(ttimeout, r.read_u64())
         .await
-        .map_err(|_| IoError::other("Timeout while reading connection id"))?
+        .map_err(|_| {
+            IoError::other(format!(
+                "Timeout while reading connection id from {}",
+                peer_addr
+            ))
+        })?
         .unwrap();
 
     let is_down = (id & 1) != 0;
     id >>= 1;
 
     {
-        let mut conn_map = conn_map.lock().await;
+        let mut conn_map_l = conn_map.lock().await;
 
-        if let Some((t, rw)) = conn_map.remove(&id) {
-            drop(conn_map);
+        if let Some((t, rw)) = conn_map_l.remove(&id) {
+            drop(conn_map_l);
 
             eprintln!(
-                "{} arrived {}ms later",
-                if is_down { "Down stream" } else { "Up stream" },
-                (Instant::now() - t).as_millis()
+                "{} stream arrived {}ms later from {}",
+                if is_down { "Down" } else { "Up" },
+                (Instant::now() - t).as_millis(),
+                peer_addr
             );
 
             let mut rw = rw.lock().await;
 
-            let mismatched = Err(IoError::other("Mismatched connection type").into());
+            let mismatched =
+                Err(
+                    IoError::other(format!("Mismatched connection type from {}", peer_addr)).into(),
+                );
             match rw.as_mut().unwrap() {
                 RW::R(down_r) => {
                     if !is_down {
@@ -132,8 +141,8 @@ async fn handle(conn: IncomingConnection<()>, conn_map: Arc<Mutex<ConnMap>>) -> 
             let conn_ra = conn_rs.clone();
             let mut conn_rl = conn_ra.lock().await;
 
-            conn_map.insert(id, (Instant::now(), conn_rs));
-            drop(conn_map);
+            conn_map_l.insert(id, (Instant::now(), conn_rs));
+            drop(conn_map_l);
 
             let conn_r = match addr {
                 Address::SocketAddress(addr) => TcpStream::connect(addr).await,
@@ -151,19 +160,31 @@ async fn handle(conn: IncomingConnection<()>, conn_map: Arc<Mutex<ConnMap>>) -> 
                 }
             };
 
-            if is_down {
+            spawn(async move {
+                sleep(ttimeout).await;
+
+                let mut conn_map = conn_map.lock().await;
+                let conn = conn_map.remove(&id);
+                drop(conn_map);
+
+                if conn.is_some() {
+                    eprintln!("Connection from {} timeout", peer_addr);
+                };
+            });
+
+            let _ = if is_down {
                 let _ = conn_rl.insert(RW::W(up_r));
                 drop(conn_rl);
                 drop(conn_ra);
 
-                let _ = copy(&mut down_r, &mut w).await;
+                copy(&mut down_r, &mut w).await
             } else {
                 let _ = conn_rl.insert(RW::R(down_r));
                 drop(conn_rl);
                 drop(conn_ra);
 
-                let _ = copy(&mut r, &mut up_r).await;
-            }
+                copy(&mut r, &mut up_r).await
+            };
         }
     }
 

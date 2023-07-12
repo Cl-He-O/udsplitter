@@ -47,11 +47,11 @@ async fn main() {
         // garbage collection
         spawn(async move {
             loop {
-                sleep(Duration::from_secs(60)).await;
+                sleep(Duration::from_secs(30)).await;
 
                 let now = Instant::now();
                 let mut conn_map = conn_map.lock().await;
-                conn_map.retain(|_, (t, _)| now - t.to_owned() > TIMEOUT);
+                conn_map.retain(|_, (t, _)| now - t.to_owned() < TIMEOUT);
             }
         });
     }
@@ -86,7 +86,7 @@ async fn handle(conn: IncomingConnection<()>, conn_map: Arc<Mutex<ConnMap>>) -> 
         .await
         .map_err(|_| IoError::other("Timeout while reading connection id"))?
         .unwrap();
-
+    
     let is_down = (id & 1) != 0;
     id >>= 1;
 

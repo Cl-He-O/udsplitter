@@ -1,9 +1,6 @@
-#![feature(io_error_other)]
-
 use std::{
     env::args,
     fs::File,
-    io::Error as IoError,
     net::{SocketAddr, ToSocketAddrs},
     sync::Arc,
 };
@@ -19,7 +16,7 @@ use tokio::{
 
 use serde::Deserialize;
 
-use common::handle_socks5;
+use common::{handle_socks5, other_error};
 
 #[derive(Deserialize)]
 struct Config {
@@ -111,7 +108,7 @@ async fn dial_upstream(upstream: SocketAddr, addr: Address) -> Result<(Reply, Tc
         let resp = handshake::Response::read_from(&mut upstream).await?;
         if resp.method != handshake::Method::NONE {
             let _ = upstream.shutdown().await;
-            return Err(IoError::other("No acceptable auth method").into());
+            return Err(other_error("No acceptable auth method").into());
         }
     }
 

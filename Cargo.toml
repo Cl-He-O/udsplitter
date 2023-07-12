@@ -3,7 +3,7 @@ resolver = "2"
 members = ["udsplitter-client", "udsplitter-server", "common"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 
 [workspace.dependencies]
 tokio = { version = "^1.29", features = ["full"] }

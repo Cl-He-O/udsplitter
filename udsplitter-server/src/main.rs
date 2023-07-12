@@ -1,10 +1,7 @@
-#![feature(io_error_other)]
-
 use std::{
     collections::HashMap,
     env::args,
     fs::File,
-    io::Error as IoError,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -21,7 +18,7 @@ use tokio::{
 
 use serde::Deserialize;
 
-use common::handle_socks5;
+use common::{handle_socks5, other_error};
 
 #[derive(Deserialize)]
 struct Config {
@@ -91,10 +88,7 @@ async fn handle(
     let mut id = timeout(ttimeout, r.read_u64())
         .await
         .map_err(|_| {
-            IoError::other(format!(
-                "Timeout while reading connection id from {}",
-                peer_addr
-            ))
+            other_error(format!("Timeout while reading connection id from {}", peer_addr).as_str())
         })?
         .unwrap();
 
@@ -116,10 +110,10 @@ async fn handle(
 
             let mut rw = rw.lock().await;
 
-            let mismatched =
-                Err(
-                    IoError::other(format!("Mismatched connection type from {}", peer_addr)).into(),
-                );
+            let mismatched = Err(other_error(
+                format!("Mismatched connection type from {}", peer_addr).as_str(),
+            )
+            .into());
             match rw.as_mut().unwrap() {
                 RW::R(down_r) => {
                     if !is_down {

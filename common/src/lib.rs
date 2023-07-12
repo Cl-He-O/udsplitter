@@ -1,11 +1,13 @@
-#![feature(io_error_other)]
-
-use std::io::Error as IoError;
+use std::io::{Error as IoError, ErrorKind};
 
 use socks5_proto::{Address, Error, Reply};
 use socks5_server::{connection::connect::NeedReply, Command, Connect, IncomingConnection};
 
 use tokio::io::AsyncWriteExt;
+
+pub fn other_error(err: &str) -> IoError {
+    IoError::new(ErrorKind::Other, err)
+}
 
 pub async fn handle_socks5(
     conn: IncomingConnection<()>,
@@ -58,5 +60,5 @@ pub async fn handle_socks5(
         }
     }
 
-    Err(IoError::other("Unimplemented command").into())
+    Err(other_error("Unimplemented command").into())
 }

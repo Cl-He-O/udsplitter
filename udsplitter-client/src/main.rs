@@ -16,6 +16,10 @@ use tokio::{
 
 use serde::Deserialize;
 
+use getrandom::getrandom;
+use rand_core::{RngCore, SeedableRng};
+use rand_pcg::Pcg64;
+
 use common::{handle_socks5, other_error};
 
 #[derive(Deserialize)]
@@ -38,19 +42,21 @@ async fn main() {
         config.down.to_socket_addrs().unwrap().next().unwrap(),
     );
 
-    let mut conn_id = 0_u64;
+    let mut seed = [0; 32];
+    getrandom(&mut seed).unwrap();
+    let mut rng = Pcg64::from_seed(seed);
 
     loop {
         if let Ok((conn, _)) = server.accept().await {
             eprintln!("Connection from {}", conn.peer_addr().unwrap());
 
+            let id = rng.next_u64();
+
             spawn(async move {
-                if let Err(err) = handle(conn, up, down, conn_id << 1).await {
+                if let Err(err) = handle(conn, up, down, id << 1).await {
                     eprintln!("{}", err)
                 }
             });
-
-            conn_id += 1;
         }
     }
 }
@@ -88,11 +94,14 @@ async fn handle(
     let (mut up_c, mut down_c) = split(conn);
 
     spawn(async move {
-        let _ = down.write_u64(id | 1).await;
+        if let Err(_) = down.write_u64(id | 1).await {
+            return;
+        };
         let _ = copy(&mut down, &mut down_c).await;
+        let _ = down_c.shutdown().await;
     });
 
-    let _ = up.write_u64(id).await;
+    up.write_u64(id).await?;
     let _ = copy(&mut up_c, &mut up).await;
 
     Ok(())
@@ -113,7 +122,7 @@ async fn dial_upstream(upstream: SocketAddr, addr: Address) -> Result<(Reply, Tc
     }
 
     let req = Request::new(Command::Connect, addr);
-    let _ = req.write_to(&mut upstream).await;
+    req.write_to(&mut upstream).await?;
 
     let reply = Response::read_from(&mut upstream).await?.reply;
     if reply != Reply::Succeeded {

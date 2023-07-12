@@ -114,20 +114,23 @@ async fn handle(
                 format!("Mismatched connection type from {}", peer_addr).as_str(),
             )
             .into());
-            match rw.as_mut().unwrap() {
-                RW::R(down_r) => {
-                    if !is_down {
-                        return mismatched;
-                    }
 
-                    let _ = copy(down_r, &mut w).await;
-                }
-                RW::W(up_r) => {
-                    if is_down {
-                        return mismatched;
-                    }
+            if let Some(rw) = rw.as_mut() {
+                match rw {
+                    RW::R(down_r) => {
+                        if !is_down {
+                            return mismatched;
+                        }
 
-                    let _ = copy(&mut r, up_r).await;
+                        let _ = copy(down_r, &mut w).await;
+                    }
+                    RW::W(up_r) => {
+                        if is_down {
+                            return mismatched;
+                        }
+
+                        let _ = copy(&mut r, up_r).await;
+                    }
                 }
             }
         } else {
@@ -138,7 +141,7 @@ async fn handle(
             conn_map_l.insert(id, (Instant::now(), conn_rs));
             drop(conn_map_l);
 
-            let conn_r = match addr {
+            let conn_r = match addr.clone() {
                 Address::SocketAddress(addr) => TcpStream::connect(addr).await,
                 Address::DomainAddress(host, port) => {
                     TcpStream::connect((String::from_utf8_lossy(&host).as_ref(), port)).await

@@ -45,7 +45,8 @@ async fn main() {
 
     loop {
         if let Ok((conn, _)) = server.accept().await {
-            eprintln!("{}", conn.peer_addr().unwrap());
+            eprintln!("Connection from {}", conn.peer_addr().unwrap());
+
             spawn(async move {
                 if let Err(err) = handle(conn, up, down, conn_id << 1).await {
                     eprintln!("{}", err)

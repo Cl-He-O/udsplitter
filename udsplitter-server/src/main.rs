@@ -12,7 +12,7 @@ use std::{
 use socks5_proto::{Address, Error, Reply};
 use socks5_server::{auth::NoAuth, IncomingConnection, Server as Socks5Server};
 use tokio::{
-    io::{copy, split, AsyncReadExt, AsyncWriteExt},
+    io::{copy, split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
     net::{TcpListener, TcpStream},
     spawn,
     sync::Mutex,
@@ -28,7 +28,12 @@ struct Config {
     listen: String,
 }
 
-type ConnMap = HashMap<u64, (Instant, TcpStream)>;
+enum RW {
+    R(ReadHalf<TcpStream>),
+    W(WriteHalf<TcpStream>),
+}
+
+type ConnMap = HashMap<u64, (Instant, Arc<Mutex<Option<RW>>>)>;
 
 const TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -61,6 +66,7 @@ async fn main() {
             let conn_map = conn_map.clone();
 
             spawn(async move {
+                eprintln!("Connection from {}", conn.peer_addr().unwrap());
                 if let Err(err) = handle(conn, conn_map).await {
                     eprintln!("{}", err)
                 }
@@ -72,7 +78,7 @@ async fn main() {
 async fn handle(conn: IncomingConnection<()>, conn_map: Arc<Mutex<ConnMap>>) -> Result<(), Error> {
     let (conn, addr) = handle_socks5(conn).await?;
 
-    let conn = match conn.reply(Reply::Succeeded, Address::unspecified()).await {
+    let mut conn = match conn.reply(Reply::Succeeded, Address::unspecified()).await {
         Ok(conn) => conn,
         Err((err, mut conn)) => {
             let _ = conn.shutdown().await;
@@ -80,23 +86,54 @@ async fn handle(conn: IncomingConnection<()>, conn_map: Arc<Mutex<ConnMap>>) -> 
         }
     };
 
-    let mut conn: TcpStream = conn.into();
+    let (mut r, mut w) = conn.split();
 
-    let mut id = timeout(TIMEOUT, conn.read_u64())
+    let mut id = timeout(TIMEOUT, r.read_u64())
         .await
         .map_err(|_| IoError::other("Timeout while reading connection id"))?
         .unwrap();
-    
+
     let is_down = (id & 1) != 0;
     id >>= 1;
 
     {
         let mut conn_map = conn_map.lock().await;
 
-        if let Some((_, conn_early)) = conn_map.remove(&id) {
+        if let Some((t, rw)) = conn_map.remove(&id) {
             drop(conn_map);
 
-            let conn_early = conn_early;
+            eprintln!(
+                "{} arrived {}ms later",
+                if is_down { "Down stream" } else { "Up stream" },
+                (Instant::now() - t).as_millis()
+            );
+
+            let mut rw = rw.lock().await;
+
+            let mismatched = Err(IoError::other("Mismatched connection type").into());
+            match rw.as_mut().unwrap() {
+                RW::R(down_r) => {
+                    if !is_down {
+                        return mismatched;
+                    }
+
+                    let _ = copy(down_r, &mut w).await;
+                }
+                RW::W(up_r) => {
+                    if is_down {
+                        return mismatched;
+                    }
+
+                    let _ = copy(&mut r, up_r).await;
+                }
+            }
+        } else {
+            let conn_rs = Arc::new(Mutex::new(None));
+            let conn_ra = conn_rs.clone();
+            let mut conn_rl = conn_ra.lock().await;
+
+            conn_map.insert(id, (Instant::now(), conn_rs));
+            drop(conn_map);
 
             let conn_r = match addr {
                 Address::SocketAddress(addr) => TcpStream::connect(addr).await,
@@ -105,33 +142,28 @@ async fn handle(conn: IncomingConnection<()>, conn_map: Arc<Mutex<ConnMap>>) -> 
                 }
             };
 
-            let conn_r = match conn_r {
-                Ok(conn) => conn,
+            let (mut down_r, mut up_r) = match conn_r {
+                Ok(conn) => split(conn),
                 Err(err) => {
-                    let _ = conn.shutdown().await;
+                    let _ = w.shutdown().await;
 
                     return Err(err.into());
                 }
             };
 
-            let (mut up, mut down) = if is_down {
-                (conn_early, conn)
+            if is_down {
+                let _ = conn_rl.insert(RW::W(up_r));
+                drop(conn_rl);
+                drop(conn_ra);
+
+                let _ = copy(&mut down_r, &mut w).await;
             } else {
-                (conn, conn_early)
-            };
+                let _ = conn_rl.insert(RW::R(down_r));
+                drop(conn_rl);
+                drop(conn_ra);
 
-            let (mut down_r, mut up_r) = split(conn_r);
-
-            spawn(async move {
-                let _ = copy(&mut down_r, &mut down).await;
-            });
-
-            let _ = copy(&mut up, &mut up_r).await;
-        } else {
-            let conn = conn;
-
-            conn_map.insert(id, (Instant::now(), conn));
-            drop(conn_map);
+                let _ = copy(&mut r, &mut up_r).await;
+            }
         }
     }
 

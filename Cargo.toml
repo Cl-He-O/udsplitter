@@ -1,6 +1,17 @@
 [workspace]
 resolver = "2"
-members = ["udsplitter-client","udsplitter-server","common"]
+members = ["udsplitter-client", "udsplitter-server", "common"]
+
+[workspace.package]
+version = "0.2.0"
+
+[workspace.dependencies]
+tokio = { version = "^1.29", features = ["full"] }
+socks5-server = "^0.9"
+socks5-proto = "^0.4"
+
+serde = { version = "^1.0", features = ["derive"] }
+serde_json = "^1.0"
 
 [profile.release]
 lto = true

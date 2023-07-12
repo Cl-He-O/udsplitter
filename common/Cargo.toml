@@ -1,14 +1,11 @@
 [package]
 name = "common"
-version = "0.1.0"
+version = { workspace = true }
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-
-tokio = { version = "^1.29", features = ["full"] }
-socks5-server = "*"
-socks5-proto = "*"
-
-rand = "*"
+tokio = { workspace = true }
+socks5-server = { workspace = true }
+socks5-proto = { workspace = true }

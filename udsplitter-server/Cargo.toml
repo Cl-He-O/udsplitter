@@ -1,17 +1,16 @@
 [package]
 name = "udsplitter-server"
-version = "0.1.0"
+version = { workspace = true }
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+tokio = { workspace = true }
+socks5-server = { workspace = true }
+socks5-proto = { workspace = true }
 
-tokio = { version = "*", features = ["full"] }
-socks5-server = "*"
-socks5-proto = "*"
+serde = { workspace = true }
+serde_json = { workspace = true }
 
-serde = { version = "*", features = ["derive"] }
-serde_json = "*"
-
-common = {path = "../common"}
+common = { path = "../common" }

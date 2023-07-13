@@ -56,11 +56,12 @@ async fn main() {
             let conn_map = conn_map.clone();
 
             spawn(async move {
-                eprintln!("Connection from {}", conn.peer_addr().unwrap());
+                let peer_addr = conn.peer_addr().unwrap();
+                eprintln!("Connection from {}", peer_addr);
                 if let Err(err) =
                     handle(conn, conn_map, Duration::from_millis(config.timeout_ms)).await
                 {
-                    eprintln!("{}", err)
+                    eprintln!("{} from {}", err, peer_addr);
                 }
             });
         }
@@ -73,6 +74,7 @@ async fn handle(
     ttimeout: Duration,
 ) -> Result<(), Error> {
     let peer_addr = conn.peer_addr().unwrap();
+
     let (conn, addr) = handle_socks5(conn).await?;
 
     let conn = match conn.reply(Reply::Succeeded, Address::unspecified()).await {
@@ -87,9 +89,7 @@ async fn handle(
 
     let mut id = timeout(ttimeout, r.read_u64())
         .await
-        .map_err(|_| {
-            other_error(format!("Timeout while reading connection id from {}", peer_addr).as_str())
-        })?
+        .map_err(|_| other_error("Timeout while reading connection id"))?
         .unwrap();
 
     let is_down = (id & 1) != 0;
@@ -102,18 +102,14 @@ async fn handle(
             drop(conn_map_l);
 
             eprintln!(
-                "{} stream arrived {}ms later from {}",
+                "{} stream arrived {}ms later",
                 if is_down { "Down" } else { "Up" },
-                (Instant::now() - t).as_millis(),
-                peer_addr
+                (Instant::now() - t).as_millis()
             );
 
             let mut rw = rw.lock().await;
 
-            let mismatched = Err(other_error(
-                format!("Mismatched connection type from {}", peer_addr).as_str(),
-            )
-            .into());
+            let mismatched = Err(other_error("Mismatched connection type"));
 
             if let Some(rw) = rw.as_mut() {
                 match rw {
@@ -165,7 +161,7 @@ async fn handle(
                 drop(conn_map);
 
                 if conn.is_some() {
-                    eprintln!("Connection from {} timeout", peer_addr);
+                    eprintln!("Connection timeout from {}", peer_addr);
                 };
             });
 

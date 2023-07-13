@@ -48,13 +48,14 @@ async fn main() {
 
     loop {
         if let Ok((conn, _)) = server.accept().await {
-            eprintln!("Connection from {}", conn.peer_addr().unwrap());
+            let peer_addr = conn.peer_addr().unwrap();
+            eprintln!("Connection from {}", peer_addr);
 
             let id = rng.next_u64();
 
             spawn(async move {
                 if let Err(err) = handle(conn, up, down, id << 1).await {
-                    eprintln!("{}", err)
+                    eprintln!("{} from {}", err, peer_addr)
                 }
             });
         }
@@ -83,13 +84,18 @@ async fn handle(
         Reply::Succeeded
     };
 
-    let conn = match conn.reply(reply, addr).await {
+    let mut conn = match conn.reply(reply, addr).await {
         Ok(conn) => conn,
         Err((err, mut conn)) => {
             let _ = conn.shutdown().await;
             return Err(err.into());
         }
     };
+    if reply != Reply::Succeeded {
+        let _ = conn.shutdown().await;
+
+        return Err(other_error("Unsuccessful socks5 reply"));
+    }
 
     let (mut up_c, mut down_c) = split(conn);
 
@@ -117,7 +123,7 @@ async fn dial_upstream(upstream: SocketAddr, addr: Address) -> Result<(Reply, Tc
         let resp = handshake::Response::read_from(&mut upstream).await?;
         if resp.method != handshake::Method::NONE {
             let _ = upstream.shutdown().await;
-            return Err(other_error("No acceptable auth method").into());
+            return Err(other_error("No acceptable auth method"));
         }
     }
 

@@ -5,8 +5,8 @@ use socks5_server::{connection::connect::NeedReply, Command, Connect, IncomingCo
 
 use tokio::io::AsyncWriteExt;
 
-pub fn other_error(err: &str) -> IoError {
-    IoError::new(ErrorKind::Other, err)
+pub fn other_error(err: &str) -> Error {
+    IoError::new(ErrorKind::Other, err).into()
 }
 
 pub async fn handle_socks5(
@@ -60,5 +60,5 @@ pub async fn handle_socks5(
         }
     }
 
-    Err(other_error("Unimplemented command").into())
+    Err(other_error("Unimplemented command"))
 }

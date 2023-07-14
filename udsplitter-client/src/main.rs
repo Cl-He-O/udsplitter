@@ -48,14 +48,13 @@ async fn main() {
 
     loop {
         if let Ok((conn, _)) = server.accept().await {
-            let peer_addr = conn.peer_addr().unwrap();
-            eprintln!("Connection from {}", peer_addr);
+            eprintln!("Connection from {}", conn.peer_addr().unwrap());
 
             let id = rng.next_u64();
 
             spawn(async move {
                 if let Err(err) = handle(conn, up, down, id << 1).await {
-                    eprintln!("{} from {}", err, peer_addr)
+                    eprintln!("{}", err)
                 }
             });
         }
@@ -74,14 +73,14 @@ async fn handle(
         dial_upstream(up, addr.clone()),
         dial_upstream(down, addr.clone())
     );
-    let ((r_up, mut up), (r_down, mut down)) = (res_up?, res_down?);
+    let ((r_up, mut up_s), (r_down, mut down_s)) = (res_up?, res_down?);
 
-    let reply = if r_up != Reply::Succeeded {
-        r_up
+    let (reply, err_from) = if r_up != Reply::Succeeded {
+        (r_up, up.to_string())
     } else if r_down != Reply::Succeeded {
-        r_down
+        (r_down, down.to_string())
     } else {
-        Reply::Succeeded
+        (Reply::Succeeded, "".into())
     };
 
     let mut conn = match conn.reply(reply, addr).await {
@@ -94,21 +93,23 @@ async fn handle(
     if reply != Reply::Succeeded {
         let _ = conn.shutdown().await;
 
-        return Err(other_error("Unsuccessful socks5 reply"));
+        return Err(other_error(
+            format!("Unsuccessful socks5 reply from {}", err_from).as_str(),
+        ));
     }
 
     let (mut up_c, mut down_c) = split(conn);
 
     spawn(async move {
-        if let Err(_) = down.write_u64(id | 1).await {
+        if let Err(_) = down_s.write_u64(id | 1).await {
             return;
         };
-        let _ = copy(&mut down, &mut down_c).await;
+        let _ = copy(&mut down_s, &mut down_c).await;
         let _ = down_c.shutdown().await;
     });
 
-    up.write_u64(id).await?;
-    let _ = copy(&mut up_c, &mut up).await;
+    up_s.write_u64(id).await?;
+    let _ = copy(&mut up_c, &mut up_s).await;
 
     Ok(())
 }
@@ -122,8 +123,11 @@ async fn dial_upstream(upstream: SocketAddr, addr: Address) -> Result<(Reply, Tc
 
         let resp = handshake::Response::read_from(&mut upstream).await?;
         if resp.method != handshake::Method::NONE {
+            let peer_addr = upstream.peer_addr().unwrap();
             let _ = upstream.shutdown().await;
-            return Err(other_error("No acceptable auth method"));
+            return Err(other_error(
+                format!("No acceptable auth method from {}", peer_addr).as_str(),
+            ));
         }
     }
 

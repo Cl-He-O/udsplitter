@@ -11,7 +11,8 @@ use tokio::{
     io::{copy, split, AsyncWriteExt},
     join,
     net::{TcpListener, TcpStream},
-    spawn,
+    select, spawn,
+    sync::Notify,
 };
 
 use serde::Deserialize;
@@ -100,16 +101,25 @@ async fn handle(
 
     let (mut up_c, mut down_c) = split(conn);
 
-    spawn(async move {
-        if let Err(_) = down_s.write_u64(id | 1).await {
-            return;
-        };
-        let _ = copy(&mut down_s, &mut down_c).await;
-        let _ = down_c.shutdown().await;
-    });
+    let conn_closed = Arc::new(Notify::new());
+    {
+        let conn_closed = conn_closed.clone();
+        spawn(async move {
+            if let Ok(_) = down_s.write_u64(id | 1).await {
+                select! {
+                    _ = copy(&mut down_s, &mut down_c) => {},
+                    _ = conn_closed.notified() => {}
+                };
+            }
+            let _ = down_c.shutdown().await;
+        });
+    }
 
-    up_s.write_u64(id).await?;
-    let _ = copy(&mut up_c, &mut up_s).await;
+    if let Ok(_) = up_s.write_u64(id).await {
+        let _ = copy(&mut up_c, &mut up_s).await;
+    }
+
+    conn_closed.notify_one();
 
     Ok(())
 }

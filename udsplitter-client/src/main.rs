@@ -6,7 +6,7 @@ use std::{
 };
 
 use socks5_proto::{handshake, Address, Command, Error, Reply, Request, Response};
-use socks5_server::{auth::NoAuth, IncomingConnection, Server as Socks5Server};
+use socks5_server::{auth::NoAuth, IncomingConnection, Server as Socks5Server, connection::state::NeedAuthenticate};
 use tokio::{
     io::{copy, split, AsyncWriteExt},
     join,
@@ -36,7 +36,7 @@ async fn main() {
         serde_json::from_reader(File::open(args().nth(1).unwrap()).unwrap()).unwrap();
 
     let listener = TcpListener::bind(&config.listen).await.unwrap();
-    let server = Socks5Server::from((listener, Arc::new(NoAuth) as Arc<_>));
+    let server = Socks5Server::new(listener, Arc::new(NoAuth) as Arc<_>);
 
     let (up, down) = (
         config.up.to_socket_addrs().unwrap().next().unwrap(),
@@ -63,7 +63,7 @@ async fn main() {
 }
 
 async fn handle(
-    conn: IncomingConnection<()>,
+    conn: IncomingConnection<(), NeedAuthenticate>,
     up: SocketAddr,
     down: SocketAddr,
     id: u64,

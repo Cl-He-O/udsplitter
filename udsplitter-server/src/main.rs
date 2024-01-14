@@ -7,7 +7,9 @@ use std::{
 };
 
 use socks5_proto::{Address, Error, Reply};
-use socks5_server::{auth::NoAuth, IncomingConnection, Server as Socks5Server};
+use socks5_server::{
+    auth::NoAuth, connection::state::NeedAuthenticate, IncomingConnection, Server as Socks5Server,
+};
 use tokio::{
     io::{copy, split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
     net::{TcpListener, TcpStream},
@@ -34,12 +36,12 @@ impl Config {
     }
 }
 
-enum RW {
+enum ConnHalf {
     R(ReadHalf<TcpStream>),
     W(WriteHalf<TcpStream>),
 }
 
-type ConnMap = HashMap<u64, (Instant, Arc<Mutex<Option<RW>>>)>;
+type ConnMap = HashMap<u64, (Instant, Arc<Mutex<Option<ConnHalf>>>)>;
 
 #[tokio::main]
 async fn main() {
@@ -47,7 +49,7 @@ async fn main() {
         serde_json::from_reader(File::open(args().nth(1).unwrap()).unwrap()).unwrap();
 
     let listener = TcpListener::bind(&config.listen).await.unwrap();
-    let server = Socks5Server::from((listener, Arc::new(NoAuth) as Arc<_>));
+    let server = Socks5Server::new(listener, Arc::new(NoAuth) as Arc<_>);
 
     let conn_map = Arc::new(Mutex::new(ConnMap::new()));
 
@@ -69,9 +71,9 @@ async fn main() {
 }
 
 async fn handle(
-    conn: IncomingConnection<()>,
+    conn: IncomingConnection<(), NeedAuthenticate>,
     conn_map: Arc<Mutex<ConnMap>>,
-    ttimeout: Duration,
+    dur_timeout: Duration,
 ) -> Result<(), Error> {
     let peer_addr = conn.peer_addr().unwrap();
 
@@ -87,7 +89,7 @@ async fn handle(
 
     let (mut r, mut w) = split(conn);
 
-    let mut id = timeout(ttimeout, r.read_u64())
+    let mut id = timeout(dur_timeout, r.read_u64())
         .await
         .map_err(|_| other_error("Timeout while reading connection id"))?
         .unwrap();
@@ -98,7 +100,8 @@ async fn handle(
     {
         let mut conn_map_l = conn_map.lock().await;
 
-        if let Some((t, rw)) = conn_map_l.remove(&id) {
+        if let Some((t, conn_half)) = conn_map_l.remove(&id) {
+            // complete session
             drop(conn_map_l);
 
             eprintln!(
@@ -107,44 +110,49 @@ async fn handle(
                 (Instant::now() - t).as_millis()
             );
 
-            let mut rw = rw.lock().await;
+            let mut conn_half = conn_half.lock().await;
 
             let mismatched = Err(other_error("Mismatched connection type"));
 
-            if let Some(rw) = rw.as_mut() {
-                match rw {
-                    RW::R(down_r) => {
+            if let Some(conn_half) = conn_half.as_mut() {
+                match conn_half {
+                    ConnHalf::R(down) => {
                         if !is_down {
                             return mismatched;
                         }
 
-                        let _ = copy(down_r, &mut w).await;
+                        let _ = copy(down, &mut w).await;
                     }
-                    RW::W(up_r) => {
+                    ConnHalf::W(up) => {
                         if is_down {
                             return mismatched;
                         }
 
-                        let _ = copy(&mut r, up_r).await;
+                        let _ = copy(&mut r, up).await;
                     }
                 }
+            }else{
+                unreachable!("conn_half couldn't be None")
             }
         } else {
-            let conn_rs = Arc::new(Mutex::new(None));
-            let conn_ra = conn_rs.clone();
-            let mut conn_rl = conn_ra.lock().await;
+            // new session
+            let conn_remote_arc = Arc::new(Mutex::new(None)); // remote connection
+            let mut conn_remote_lock = conn_remote_arc.lock().await; // lock prevents conn_half.is_none() case
 
-            conn_map_l.insert(id, (Instant::now(), conn_rs));
-            drop(conn_map_l);
+            {
+                let conn_remote_arc = conn_remote_arc.clone();
+                conn_map_l.insert(id, (Instant::now(), conn_remote_arc));
+                drop(conn_map_l);
+            }
 
-            let conn_r = match addr.clone() {
+            let conn_remote = match addr.clone() {
                 Address::SocketAddress(addr) => TcpStream::connect(addr).await,
                 Address::DomainAddress(host, port) => {
                     TcpStream::connect((String::from_utf8_lossy(&host).as_ref(), port)).await
                 }
             };
 
-            let (mut down_r, mut up_r) = match conn_r {
+            let (mut down, mut up) = match conn_remote {
                 Ok(conn) => split(conn),
                 Err(err) => {
                     let _ = w.shutdown().await;
@@ -154,7 +162,7 @@ async fn handle(
             };
 
             spawn(async move {
-                sleep(ttimeout).await;
+                sleep(dur_timeout).await;
 
                 let mut conn_map = conn_map.lock().await;
                 let conn = conn_map.remove(&id);
@@ -166,17 +174,17 @@ async fn handle(
             });
 
             let _ = if is_down {
-                let _ = conn_rl.insert(RW::W(up_r));
-                drop(conn_rl);
-                drop(conn_ra);
+                let _ = conn_remote_lock.insert(ConnHalf::W(up));
+                drop(conn_remote_lock);
+                drop(conn_remote_arc);
 
-                copy(&mut down_r, &mut w).await
+                copy(&mut down, &mut w).await
             } else {
-                let _ = conn_rl.insert(RW::R(down_r));
-                drop(conn_rl);
-                drop(conn_ra);
+                let _ = conn_remote_lock.insert(ConnHalf::R(down));
+                drop(conn_remote_lock);
+                drop(conn_remote_arc);
 
-                copy(&mut r, &mut up_r).await
+                copy(&mut r, &mut up).await
             };
         }
     }

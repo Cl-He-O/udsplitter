@@ -74,15 +74,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
-name = "common"
-version = "0.4.0"
-dependencies = [
- "socks5-proto",
- "socks5-server",
- "tokio",
-]
-
-[[package]]
 name = "getrandom"
 version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -352,6 +343,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tests"
+version = "0.4.0"
+dependencies = [
+ "tokio",
+ "udsplitter-client",
+ "udsplitter-server",
+ "utils",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -405,27 +406,25 @@ dependencies = [
 name = "udsplitter-client"
 version = "0.4.0"
 dependencies = [
- "common",
  "getrandom",
  "rand_core",
  "rand_pcg",
  "serde",
- "serde_json",
  "socks5-proto",
  "socks5-server",
  "tokio",
+ "utils",
 ]
 
 [[package]]
 name = "udsplitter-server"
 version = "0.4.0"
 dependencies = [
- "common",
  "serde",
- "serde_json",
  "socks5-proto",
  "socks5-server",
  "tokio",
+ "utils",
 ]
 
 [[package]]
@@ -433,6 +432,17 @@ name = "unicode-ident"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "301abaae475aa91687eb82514b328ab47a211a533026cb25fc3e519b86adfc3c"
+
+[[package]]
+name = "utils"
+version = "0.4.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "socks5-proto",
+ "socks5-server",
+ "tokio",
+]
 
 [[package]]
 name = "wasi"

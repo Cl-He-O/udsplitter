@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["udsplitter-client", "udsplitter-server", "common"]
+members = [ "tests","udsplitter-client", "udsplitter-server", "utils"]
 
 [workspace.package]
 version = "0.4.0"

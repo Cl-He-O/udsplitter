@@ -30,6 +30,8 @@ struct Config {
 
     #[serde(default = "Config::default_timeout_ms")]
     timeout_ms: u64,
+    #[serde(skip)]
+    timeout: Duration,
 }
 
 impl Config {
@@ -47,13 +49,31 @@ type ConnMap = HashMap<u64, (Instant, Arc<Mutex<Option<ConnHalf>>>)>;
 
 #[tokio::main]
 async fn main() {
-    let config: Config =
+    let mut config: Config =
         serde_json::from_reader(File::open(args().nth(1).unwrap()).unwrap()).unwrap();
+    config.timeout = Duration::from_millis(config.timeout_ms);
 
     let listener = TcpListener::bind(&config.listen).await.unwrap();
     let server = Socks5Server::new(listener, Arc::new(NoAuth) as Arc<_>);
 
     let conn_map = Arc::new(Mutex::new(ConnMap::new()));
+
+    {
+        let conn_map = conn_map.clone();
+
+        spawn(async move {
+            loop {
+                // session will live for 1.5*timeout at most
+                sleep(config.timeout / 2).await;
+
+                let mut conn_map = conn_map.lock().await;
+                let until = Instant::now() - config.timeout;
+
+                conn_map.retain(|_, &mut (v, _)|until < v);
+                eprintln!("conn_map.len()=={}", conn_map.len());
+            }
+        });
+    }
 
     loop {
         if let Ok((conn, _)) = server.accept().await {
@@ -77,8 +97,6 @@ async fn handle(
     conn_map: Arc<Mutex<ConnMap>>,
     dur_timeout: Duration,
 ) -> Result<(), Error> {
-    let peer_addr = conn.peer_addr().unwrap();
-
     let (conn, addr) = handle_socks5(conn).await?;
 
     let conn = match conn.reply(Reply::Succeeded, Address::unspecified()).await {
@@ -144,19 +162,6 @@ async fn handle(
         }
 
         let (mut down, mut up) = connect_remote(addr.clone(), &mut w).await?;
-
-        // timeout
-        spawn(async move {
-            sleep(dur_timeout).await;
-
-            let mut conn_map = conn_map.lock().await;
-            let conn = conn_map.remove(&id);
-            drop(conn_map);
-
-            if conn.is_some() {
-                eprintln!("Connection timeout from {}", peer_addr);
-            };
-        });
 
         // start copying
         let _ = if is_down {

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = [ "udsplitter-client", "udsplitter-server", "utils"]
+members = [ "udsplitter", "udsplitter-client", "udsplitter-server", "utils"]
 
 [workspace.package]
 version = "0.4.0"
@@ -16,5 +16,4 @@ serde_json = "^1.0"
 [profile.release]
 lto = true
 strip = true
-codegen-units = 1
 panic = "abort"

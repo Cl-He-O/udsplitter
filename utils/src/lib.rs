@@ -100,5 +100,9 @@ pub async fn connect_remote(
 }
 
 pub fn config_from_arg<T: DeserializeOwned>() -> T {
-    serde_json::from_reader(File::open(args().nth(1).unwrap()).unwrap()).unwrap()
+    config_from_path(&args().nth(1).unwrap())
+}
+
+pub fn config_from_path<T: DeserializeOwned>(path: &str) -> T {
+    serde_json::from_reader(File::open(path).unwrap()).unwrap()
 }

@@ -134,26 +134,27 @@ async fn handle(
         let mismatched = Err(other_error("Mismatched connection type"));
 
         // start copying
-        match conn_half.as_mut().unwrap() {
-            ConnHalf::R(down) => {
+        match conn_half.as_mut() {
+            Some(ConnHalf::R(down)) => {
                 if !is_down {
                     return mismatched;
                 }
 
                 let _ = copy(down, &mut w).await;
             }
-            ConnHalf::W(up) => {
+            Some(ConnHalf::W(up)) => {
                 if is_down {
                     return mismatched;
                 }
 
                 let _ = copy(&mut r, up).await;
             }
+            None => {}
         }
     } else {
         // new session
         let conn_remote_arc = Arc::new(Mutex::new(None)); // remote connection
-        let mut conn_remote_lock = conn_remote_arc.lock().await; // lock here prevents conn_half.is_none() case
+        let mut conn_remote_lock = conn_remote_arc.lock().await;
 
         {
             let conn_remote_arc = conn_remote_arc.clone();

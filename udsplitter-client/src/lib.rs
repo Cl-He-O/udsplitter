@@ -120,7 +120,7 @@ async fn handle(
     Ok(())
 }
 
-async fn dial_upstream(upstream: SocketAddr, addr: Address) -> Result<(Reply, TcpStream), Error> {
+pub async fn dial_upstream(upstream: SocketAddr, addr: Address) -> Result<(Reply, TcpStream), Error> {
     let mut upstream = TcpStream::connect(upstream).await?;
 
     {

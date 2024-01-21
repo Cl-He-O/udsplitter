@@ -103,6 +103,10 @@ pub fn config_from_arg<T: DeserializeOwned>() -> T {
     config_from_path(&args().nth(1).unwrap())
 }
 
-pub fn config_from_path<T: DeserializeOwned>(path: &str) -> T {
+fn config_from_path<T: DeserializeOwned>(path: &str) -> T {
     serde_json::from_reader(File::open(path).unwrap()).unwrap()
+}
+
+pub fn config_from_str<T: DeserializeOwned>(s: &str) -> T {
+    serde_json::from_str(s).unwrap()
 }

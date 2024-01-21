@@ -9,8 +9,6 @@ version.workspace = true
 tokio = { workspace = true }
 socks5-proto = { workspace = true }
 
-rand = "^0.8"
-
 udsplitter-client = { path = "../udsplitter-client" }
 udsplitter-server = { path = "../udsplitter-server" }
 

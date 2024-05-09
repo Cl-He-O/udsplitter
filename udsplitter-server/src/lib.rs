@@ -111,8 +111,7 @@ async fn handle(
 
     let mut id = timeout(timeout_id, r.read_u64())
         .await
-        .map_err(|_| other_error("Timeout while reading connection id"))?
-        .unwrap();
+        .map_err(|_| other_error("Timeout while reading connection id"))??;
 
     let is_down = (id & 1) != 0;
     id >>= 1;
